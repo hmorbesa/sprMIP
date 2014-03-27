@@ -24,6 +24,7 @@ typedef VectorContainerType::iterator                   VectorIteratorType;
 typedef itk::VectorImage<VectorContainerType,
             Dimension>                                  VotingLabelType;
 typedef itk::ImageRegionConstIterator< LabelImageType > ConstLabelIteratorType;
+typedef itk::ImageRegionIterator< LabelImageType >      LabelIteratorType;
 typedef itk::ImageRegionIterator< VotingLabelType >     VotingLabelIteratorType;
 
 void CreateVotingImage(VotingLabelType::Pointer p, LabelImageType::Pointer refImg)
@@ -36,13 +37,23 @@ void CreateVotingImage(VotingLabelType::Pointer p, LabelImageType::Pointer refIm
   p->Allocate();
 }
 
+void CreateLabelImage(LabelImageType::Pointer p, LabelImageType::Pointer refImg)
+{
+  p->SetRegions(refImg->GetLargestPossibleRegion());
+  p->SetOrigin(refImg->GetOrigin());
+  p->SetSpacing(refImg->GetSpacing());
+  p->SetDirection(refImg->GetDirection());
+  p->Allocate();
+//  p->FillBuffer(0);
+}
+
 int main( int argc, char *argv[] )
 {
-  if( argc < 2 )
+  if( argc < 3 )
   {
     std::cerr << "Missing Parameters " << std::endl;
     std::cerr << "Usage:\n" << argv[0];
-    std::cerr << " listOfImages";
+    std::cerr << " listOfImages outputImage";
     std::cerr << std::endl;
     return EXIT_FAILURE;
   }
@@ -51,6 +62,7 @@ int main( int argc, char *argv[] )
   unsigned int N = 0;                                                       //Number of images in the dataset
   VotingLabelType::Pointer poll           = VotingLabelType::New();         //Image for storing votes
   LabelImageReaderType::Pointer lblReader = LabelImageReaderType::New();
+  LabelImageType::Pointer output          = LabelImageType::New();          //Output label image
   /****End Variable declaration****/
 
   //Auxiliar variables:
@@ -76,9 +88,10 @@ int main( int argc, char *argv[] )
     input = lblReader->GetOutput();
     input->DisconnectPipeline();
 
-    if(configAtlas)
+    if(configAtlas) //Allocate and configure images
     {
-      CreateVotingImage(poll, lblReader->GetOutput());
+      CreateVotingImage(poll, input);
+      CreateLabelImage(output, input);
       configAtlas = false;
     }
 
@@ -96,77 +109,43 @@ int main( int argc, char *argv[] )
 
       if(it==vote[0].end()) //If there's not that label at that spel
       {
-        std::cout << vote.GetSize() << std::endl;
         vote[0].push_back(c);//Include it...
-        vote[1];//.push_back(1);//with 1 vote
-        std::cout << "5\n";
+        vote[1].push_back(1);//with 1 vote
       }
       else //just add 1 vote
       {
-        std::cout << "6\n";
         size_t index = std::distance(vote[0].begin(), it);
-        std::cout << "7\n";
         vote[1].at(index) ++ ;//with 1 vote
-        std::cout << "8\n";
       }
     }
   }
 
-
-
-/*
-
-  ImageType::IndexType start;
-  start.Fill(0);
-  ImageType::SizeType size;
-  size.Fill(2);
-  ImageType::RegionType region(start,size);
-  ImageType::Pointer image = ImageType::New();
-  image->SetRegions(region);
-  image->SetVectorLength(2);
-  image->Allocate();
-
-  ImageType::IndexType pixelIndex;
-  ImageType::PixelType pixelValue;
-  pixelIndex[0] = 1;
-  pixelIndex[1] = 1;
-  pixelIndex[2] = 1;
-  pixelValue = image->GetPixel(pixelIndex);
-  pixelValue[0].push_back(0);
-  pixelValue[0].push_back(2);
-  pixelValue[1].push_back(1);
-  pixelValue[1].push_back(3);
-  image->SetPixel(pixelIndex, pixelValue);
-
-  for ( int i = 0; i < pixelValue[0].size(); i++)
-  {
-    std::cout << pixelValue[0][i] << " " << pixelValue[1][i] << std::endl;
+  //Setup Iterators:
+  LabelIteratorType itLbl(output,output->GetLargestPossibleRegion());
+  VotingLabelIteratorType itPoll(poll,poll->GetLargestPossibleRegion());
+  std::cout << output->GetLargestPossibleRegion() << std::endl;
+  //MAIN LOOP:
+  for( itPoll.GoToBegin(), itLbl.GoToBegin(); !itLbl.IsAtEnd(); ++itPoll, ++itLbl )
+  {    
+    itk::VariableLengthVector<VectorContainerType> vote = itPoll.Get();
+    VectorIteratorType it = std::max_element(vote[1].begin(), vote[1].end()); //The most voted label
+    size_t index = std::distance(vote[1].begin(), it);
+    itLbl.Set(vote[0].at(index));
   }
-
-  /*
-  ImageType::IndexType pixelIndex;
-  pixelIndex[0] = 1;
-  pixelIndex[1] = 1;
-
-  ImageType::PixelType pixelValue = image->GetPixel(pixelIndex);
-  std::cout << "pixel (1,1) = " << pixelValue << std::endl;
-
-  typedef itk::VariableLengthVector<double> VariableVectorType;
-  VariableVectorType variableLengthVector;
-  variableLengthVector.SetSize(2);
-  variableLengthVector[0] = 1.1;
-  variableLengthVector[1] = 2.2;
-
-  image->SetPixel(pixelIndex, variableLengthVector);
-
-  std::cout << "pixel (1,1) = " << pixelValue << std::endl;
-
-
-*/
-
-
-
-
+  //Now save the result
+  LabelImageWriterType::Pointer lblWriter = LabelImageWriterType::New();
+  lblWriter->SetInput(output);
+  lblWriter->SetFileName(argv[2]);
+  try
+  {
+    lblWriter->Update();
+  }
+  catch( itk::ExceptionObject & excp )
+  {
+    std::cerr << "Exception thrown while writing the image" << std::endl;
+    std::cerr << excp << std::endl;
+    return EXIT_FAILURE;
+  }
 
   return EXIT_SUCCESS;
 }
