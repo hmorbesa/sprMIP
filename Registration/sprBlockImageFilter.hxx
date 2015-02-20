@@ -21,7 +21,6 @@ void BlockImageFilter< TImage>
   this->numOfPartitions = input;
 }
 
-
 template< class TImage>
 void BlockImageFilter< TImage>
 ::GenerateData()

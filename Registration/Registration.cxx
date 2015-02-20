@@ -108,10 +108,8 @@ int main( int argc, char *argv[] )
     {
     std::cerr << "Missing Parameters " << std::endl;
     std::cerr << "Usage: " << argv[0];
-    std::cerr << " fixedImageFile  movingImageFile outputImagefile  ";
-    std::cerr << " [differenceOutputfile] [differenceBeforeRegistration] ";
-    std::cerr << " [deformationField] ";
-    std::cerr << " [filenameForFinalTransformParameters] [numberOfGridNodesInOneDimension]";
+    std::cerr << " fixedImageFile  movingImageFile outputImagefile";
+    std::cerr << " [number of partitions per dimension]";
     std::cerr << std::endl;
     return EXIT_FAILURE;
     }
@@ -174,18 +172,33 @@ int main( int argc, char *argv[] )
 
   fixedImageReader->SetFileName(  argv[1] );
   movingImageReader->SetFileName( argv[2] );
+  fixedImageReader->Update();
+  movingImageReader->Update();
   std::vector<unsigned int> NPartitions( ImageDimension );
-  NPartitions.assign(ImageDimension,3);
+  NPartitions.assign(ImageDimension,2);
+  unsigned int NBlocks=1;
+  if( argc>4 )
+  {
+    for( unsigned int d = 0; d<ImageDimension; d++)
+    {
+      NPartitions[d] = atoi( argv[4+d] );
+      NBlocks = NBlocks*NPartitions[d];
+    }
+  }
 
   FixedImageType::ConstPointer fixedImage = fixedImageReader->GetOutput();
 
-  registration->SetFixedImage(  fixedImage   );
-  registration->SetMovingImage( movingImageReader->GetOutput()   );
+  BlockImageFilterType::Pointer fixedBlocks = BlockImageFilterType::New();
+  BlockImageFilterType::Pointer movingBlocks = BlockImageFilterType::New();
+  fixedBlocks->SetInput(fixedImageReader->GetOutput());
+  movingBlocks->SetInput(movingImageReader->GetOutput());
+  fixedBlocks->SetNumberOfPartitions(NPartitions);
+  movingBlocks->SetNumberOfPartitions(NPartitions);
+  fixedBlocks->Update();
+  movingBlocks->Update();
 
-  fixedImageReader->Update();
-
-  BlockImageFilterType::Pointer fixedBlocky = BlockImageFilterType::New();
-  fixedBlocky->SetNumberOfPartitions(NPartitions);
+  registration->SetFixedImage(  fixedBlocks->GetOutput()   );
+  registration->SetMovingImage( movingBlocks->GetOutput()   );
 
   //  Software Guide : BeginLatex
   //
@@ -204,9 +217,9 @@ int main( int argc, char *argv[] )
   // Initialize the transform
   unsigned int numberOfGridNodesInOneDimension = 5;
 
-  if( argc > 8 )
+  if( argc > 5 )
     {
-    numberOfGridNodesInOneDimension = atoi( argv[8] );
+    numberOfGridNodesInOneDimension = atoi( argv[7] );
     }
 
   typedef itk::BSplineTransformInitializer< TransformType,
@@ -215,7 +228,11 @@ int main( int argc, char *argv[] )
   InitializerType::Pointer transformInitializer = InitializerType::New();
 
   TransformType::MeshSizeType             meshSize;
-  meshSize.Fill( numberOfGridNodesInOneDimension - SplineOrder );
+  for( unsigned int d=0; d<ImageDimension; d++)
+  {
+    meshSize[d] = NPartitions[d]*numberOfGridNodesInOneDimension - SplineOrder
+    //meshSize.Fill( numberOfGridNodesInOneDimension - SplineOrder );
+  }
 
   transformInitializer->SetTransform( transform );
   transformInitializer->SetImage( fixedImage );
@@ -287,7 +304,7 @@ int main( int argc, char *argv[] )
   //  Software Guide : EndLatex
 
   // Software Guide : BeginCodeSnippet
-  metric->SetNumberOfHistogramBins( 50 );
+  metric->SetNumberOfHistogramBins( NBlocks*50 );
   // Software Guide : EndCodeSnippet
 
   // Add time and memory probes
@@ -365,8 +382,6 @@ int main( int argc, char *argv[] )
 
 
   writer->SetFileName( argv[3] );
-
-
   caster->SetInput( resample->GetOutput() );
   writer->SetInput( caster->GetOutput()   );
 
@@ -382,110 +397,15 @@ int main( int argc, char *argv[] )
     return EXIT_FAILURE;
     }
 
-  typedef itk::SquaredDifferenceImageFilter<
-                                  FixedImageType,
-                                  FixedImageType,
-                                  OutputImageType > DifferenceFilterType;
 
-  DifferenceFilterType::Pointer difference = DifferenceFilterType::New();
-
-  WriterType::Pointer writer2 = WriterType::New();
-  writer2->SetInput( difference->GetOutput() );
-
-
-  // Compute the difference image between the
-  // fixed and resampled moving image.
-  if( argc > 4 )
-    {
-    difference->SetInput1( fixedImageReader->GetOutput() );
-    difference->SetInput2( resample->GetOutput() );
-    writer2->SetFileName( argv[4] );
-    try
-      {
-      writer2->Update();
-      }
-    catch( itk::ExceptionObject & err )
-      {
-      std::cerr << "ExceptionObject caught !" << std::endl;
-      std::cerr << err << std::endl;
-      return EXIT_FAILURE;
-      }
-    }
-
-
-  // Compute the difference image between the
-  // fixed and moving image before registration.
-  if( argc > 5 )
-    {
-    writer2->SetFileName( argv[5] );
-    difference->SetInput1( fixedImageReader->GetOutput() );
-    difference->SetInput2( movingImageReader->GetOutput() );
-    try
-      {
-      writer2->Update();
-      }
-    catch( itk::ExceptionObject & err )
-      {
-      std::cerr << "ExceptionObject caught !" << std::endl;
-      std::cerr << err << std::endl;
-      return EXIT_FAILURE;
-      }
-    }
-
-  // Generate the explicit deformation field resulting from
-  // the registration.
-  if( argc > 6 )
-    {
-    typedef itk::Vector< float, ImageDimension >          VectorPixelType;
-    typedef itk::Image< VectorPixelType, ImageDimension > DisplacementFieldImageType;
-
-    typedef itk::TransformToDisplacementFieldFilter<
-                          DisplacementFieldImageType,
-                          CoordinateRepType >             DisplacementFieldGeneratorType;
-
-    /** Create an setup displacement field generator. */
-    DisplacementFieldGeneratorType::Pointer dispfieldGenerator =
-                                                    DisplacementFieldGeneratorType::New();
-    dispfieldGenerator->UseReferenceImageOn();
-    dispfieldGenerator->SetReferenceImage( fixedImage );
-    dispfieldGenerator->SetTransform( transform );
-    try
-      {
-      dispfieldGenerator->Update();
-      }
-    catch ( itk::ExceptionObject & err )
-      {
-      std::cerr << "Exception detected while generating deformation field";
-      std::cerr << " : "  << err << std::endl;
-      return EXIT_FAILURE;
-      }
-
-    typedef itk::ImageFileWriter< DisplacementFieldImageType >  FieldWriterType;
-    FieldWriterType::Pointer fieldWriter = FieldWriterType::New();
-
-    fieldWriter->SetInput( dispfieldGenerator->GetOutput() );
-
-    fieldWriter->SetFileName( argv[6] );
-    try
-      {
-      fieldWriter->Update();
-      }
-    catch( itk::ExceptionObject & excp )
-      {
-      std::cerr << "Exception thrown " << std::endl;
-      std::cerr << excp << std::endl;
-      return EXIT_FAILURE;
-      }
-    }
-
-  // Optionally, save the transform parameters in a file
+  /*  // Optionally, save the transform parameters in a file
   if( argc > 7 )
     {
     std::ofstream parametersFile;
     parametersFile.open( argv[7] );
     parametersFile << finalParameters << std::endl;
     parametersFile.close();
-    }
+    }*/
 
   return EXIT_SUCCESS;
 }
